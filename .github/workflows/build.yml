@@ -1,10 +1,8 @@
-name: Smart Build
+name: Smart Build Fixed
 on:
   push:
     branches: [ main ]
-  release:
-    types: [created]
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
     inputs:
       python_version:
         description: 'Python version'
@@ -39,51 +37,50 @@ jobs:
       with:
         python-version: ${{ github.event.inputs.python_version || '3.11' }}
     
-    - name: Install dependencies
-      run: |
-        pip install pyinstaller
-        # 如果有 requirements.txt
-        if [ -f "requirements.txt" ]; then
-          pip install -r requirements.txt
-        fi
+    - name: Install PyInstaller
+      run: pip install pyinstaller
     
-    - name: Get version info
-      id: version
-      run: |
-        # 如果是发布版本，从标签获取版本号
-        if [[ "${{ github.event_name }}" == "release" ]]; then
-          VERSION="${{ github.event.release.tag_name }}"
-        else
-          # 否则用 commit hash
-          VERSION="dev-$(git rev-parse --short HEAD)"
-        fi
-        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+    - name: Clean previous builds
+      run: rm -rf build dist __pycache__
     
-    - name: Build application
+    - name: Build with simple name
       env:
-        TARGET_OS: ${{ github.event.inputs.macos_version || '12.0' }}
+        MACOSX_DEPLOYMENT_TARGET: ${{ github.event.inputs.macos_version || '12.0' }}
       run: |
-        # 构建
-        pyinstaller \
-          --onefile \
-          --name "myapp_v${{ steps.version.outputs.VERSION }}_macos${TARGET_OS}" \
-          main.py
+        echo "Building for macOS $MACOSX_DEPLOYMENT_TARGET with Python ${{ github.event.inputs.python_version || '3.11' }}"
         
-        # 重命名文件，去掉 .app 后缀（如果需要）
-        cd dist
-        for file in *.app; do
-          [ -f "$file" ] && mv "$file" "${file%.app}"
-        done
+        # 使用简单固定的文件名
+        pyinstaller --onefile --name "myapp" main.py
+        
+        # 检查是否成功
+        if [ -f "dist/myapp" ]; then
+          echo "✅ Build successful!"
+          ls -lh dist/
+          file dist/myapp
+        else
+          echo "❌ Build failed: dist/myapp not found"
+          exit 1
+        fi
     
-    - name: Upload to GitHub Releases
-      if: github.event_name == 'release'
-      uses: softprops/action-gh-release@v1
-      with:
-        files: dist/*
+    - name: Rename with version info
+      run: |
+        # 获取 commit hash
+        COMMIT_HASH=$(git rev-parse --short HEAD)
+        # 获取 Python 版本
+        PYTHON_VERSION=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+        # 获取 macOS 目标版本
+        MACOS_TARGET=${MACOSX_DEPLOYMENT_TARGET:-12.0}
+        
+        # 重命名文件
+        NEW_NAME="myapp_py${PYTHON_VERSION}_macos${MACOS_TARGET}_${COMMIT_HASH}"
+        mv dist/myapp "dist/${NEW_NAME}"
+        
+        echo "✅ Renamed to: ${NEW_NAME}"
+        echo "NEW_NAME=${NEW_NAME}" >> $GITHUB_ENV
     
-    - name: Upload as artifact
-      if: github.event_name != 'release'
+    - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: myapp-build
+        name: myapp-${{ github.sha }}
         path: dist/
+        retention-days: 7
