@@ -1,0 +1,6 @@
+requests
+yaml
+customtkinter
+numpy
+pandas
+openpyxl
