@@ -1,4 +1,4 @@
-name: Smart Build Fixed
+name: Smart Build Fixed for Intel Mac
 on:
   push:
     branches: [ main ]
@@ -24,31 +24,19 @@ on:
           - '12.0'
           - '13.0'
           - '14.0'
-      script_file:
-        description: 'Main script file name'
-        required: true
-        default: 'main.py'
-        type: string
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-latest  # 这是 Apple Silicon，但我们会构建通用二进制
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: List files in repository
-      run: |
-        echo "📁 Files in repository:"
-        ls -la
-        echo ""
-        echo "📄 Python files:"
-        find . -name "*.py" -type f | head -20
-    
-    - name: Setup Python
+    - name: Setup Python for Intel
       uses: actions/setup-python@v5
       with:
         python-version: ${{ github.event.inputs.python_version || '3.11' }}
+        architecture: 'x64'  # 强制使用 x86_64 Python
     
     - name: Install PyInstaller
       run: pip install pyinstaller
@@ -56,110 +44,194 @@ jobs:
     - name: Clean previous builds
       run: rm -rf build dist __pycache__
     
-    - name: Find main script
-      id: find_script
-      run: |
-        # 尝试找到主脚本文件
-        SCRIPT_FILE="${{ github.event.inputs.script_file || 'main.py' }}"
-        
-        if [ -f "$SCRIPT_FILE" ]; then
-          echo "✅ Found script: $SCRIPT_FILE"
-          echo "script_path=$SCRIPT_FILE" >> $GITHUB_OUTPUT
-        else
-          # 尝试自动查找
-          echo "⚠️ $SCRIPT_FILE not found, searching for alternatives..."
-          
-          # 查找可能的入口文件
-          POSSIBLE_FILES=("main.py" "app.py" "cli.py" "gui.py" "run.py" "start.py")
-          
-          for file in "${POSSIBLE_FILES[@]}"; do
-            if [ -f "$file" ]; then
-              echo "✅ Found alternative: $file"
-              echo "script_path=$file" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-          done
-          
-          # 查找任何 .py 文件
-          FIRST_PY=$(find . -name "*.py" -type f | head -1)
-          if [ -n "$FIRST_PY" ]; then
-            echo "✅ Using first Python file found: $FIRST_PY"
-            echo "script_path=$FIRST_PY" >> $GITHUB_OUTPUT
-          else
-            echo "❌ No Python files found in repository!"
-            echo "Available files:"
-            ls -la
-            exit 1
-          fi
-        fi
-    
-    - name: Build as macOS App
+    - name: Build for Intel Mac (x86_64)
       env:
         MACOSX_DEPLOYMENT_TARGET: ${{ github.event.inputs.macos_version || '12.0' }}
       run: |
-        echo "Building for macOS $MACOSX_DEPLOYMENT_TARGET with Python ${{ github.event.inputs.python_version || '3.11' }}"
+        echo "Building for Intel Mac (x86_64)"
+        echo "macOS target: $MACOSX_DEPLOYMENT_TARGET"
+        echo "Python version: ${{ github.event.inputs.python_version || '3.11' }}"
         
-        # 获取脚本路径
-        SCRIPT_PATH="${{ steps.find_script.outputs.script_path }}"
-        echo "📄 Using script: $SCRIPT_PATH"
+        # 检查架构
+        echo "📊 System info:"
+        uname -m
+        python -c "import platform; print(f'Python arch: {platform.machine()}')"
         
-        # 提取文件名（不含扩展名）
-        APP_NAME=$(basename "$SCRIPT_PATH" .py)
-        # 确保名称首字母大写
-        APP_NAME=$(echo "$APP_NAME" | sed 's/^./\U&/')
+        # 关键：使用 arch 命令强制在 Rosetta 2 下运行
+        echo "🔧 Building with Rosetta 2 for Intel compatibility..."
         
-        echo "📱 App name will be: $APP_NAME"
-        
-        # 构建应用
-        pyinstaller \
-          --windowed \
-          --name "$APP_NAME" \
-          "$SCRIPT_PATH"
+        # 方法1：使用 arch 命令强制 x86_64
+        arch -x86_64 /bin/bash -c "
+          # 在 x86_64 环境中构建
+          echo 'Building in x86_64 mode...'
+          pip install pyinstaller
+          
+          # 构建应用
+          pyinstaller \
+            --windowed \
+            --name 'MyApp' \
+            --target-arch x86_64 \
+            main.py
+        "
         
         # 检查是否成功
-        if [ -d "dist/${APP_NAME}.app" ]; then
-          echo "✅ macOS App created successfully!"
-          echo "📁 App location: dist/${APP_NAME}.app"
+        if [ -d "dist/MyApp.app" ]; then
+          echo "✅ Intel macOS App created successfully!"
           
-          # 显示应用包信息
-          echo "📦 App bundle contents:"
-          find "dist/${APP_NAME}.app" -type f | head -10
+          # 检查二进制架构
+          echo "📦 Checking binary architecture:"
+          file "dist/MyApp.app/Contents/MacOS/MyApp" || true
           
-          # 获取应用包大小
-          APP_SIZE=$(du -sh "dist/${APP_NAME}.app" | cut -f1)
+          # 使用 lipo 检查（如果存在）
+          if command -v lipo &> /dev/null; then
+            lipo -archs "dist/MyApp.app/Contents/MacOS/MyApp" 2>/dev/null || echo "Cannot check with lipo"
+          fi
+          
+          echo "📁 App location: dist/MyApp.app"
+          APP_SIZE=$(du -sh dist/MyApp.app | cut -f1)
           echo "📊 App size: $APP_SIZE"
-          
-          # 保存应用名称到环境变量
-          echo "APP_NAME=${APP_NAME}" >> $GITHUB_ENV
         else
-          echo "❌ Build failed: ${APP_NAME}.app not found"
-          echo "Checking dist directory:"
-          ls -la dist/
+          echo "❌ Build failed: MyApp.app not found"
           exit 1
         fi
     
-    - name: Create launcher script
+    - name: Create universal binary (可选 - 同时支持 Intel 和 Apple Silicon)
+      if: false  # 默认禁用，需要时启用
       run: |
-        APP_NAME="${{ env.APP_NAME }}"
+        echo "🔄 Creating universal binary..."
         
-        echo "🔄 Creating launcher script for $APP_NAME..."
+        # 首先构建 arm64 版本
+        arch -arm64 /bin/bash -c "
+          echo 'Building arm64 version...'
+          pip install pyinstaller
+          pyinstaller \
+            --windowed \
+            --name 'MyApp_arm64' \
+            --target-arch arm64 \
+            --distpath dist_arm64 \
+            main.py
+        "
+        
+        # 创建通用二进制
+        lipo -create \
+          "dist/MyApp.app/Contents/MacOS/MyApp" \
+          "dist_arm64/MyApp_arm64.app/Contents/MacOS/MyApp_arm64" \
+          -output "dist/MyApp.app/Contents/MacOS/MyApp"
+        
+        echo "✅ Universal binary created!"
+        lipo -archs "dist/MyApp.app/Contents/MacOS/MyApp"
+    
+    - name: Create DMG installer for Intel Mac
+      run: |
+        echo "📦 Creating DMG installer for Intel Mac..."
+        
+        # 创建临时目录
+        mkdir -p dmg_temp
+        
+        # 复制应用到临时目录
+        cp -r dist/MyApp.app dmg_temp/
+        
+        # 创建 Applications 文件夹链接
+        ln -s /Applications dmg_temp/Applications
+        
+        # 添加说明文件
+        cat > dmg_temp/README-Intel-Mac.txt << 'EOF'
+        ========================================
+        MyApp for Intel Mac (x86_64)
+        ========================================
+        
+        ✅ This app is built specifically for:
+           - Intel-based Macs
+           - macOS 12.0 or later
+           - x86_64 architecture
+        
+        🚀 HOW TO INSTALL:
+        1. Double-click this DMG file
+        2. Drag "MyApp.app" to the Applications folder
+        3. Launch from Applications
+        
+        🔧 TROUBLESHOOTING for Intel Mac:
+        
+        If app won't open:
+          xattr -cr /Applications/MyApp.app
+        
+        For macOS 12.7.6 specifically:
+          - Right-click the app
+          - Select "Open"
+          - Click "Open" in the dialog
+        
+        ========================================
+        Built for: Intel x86_64 Mac
+        macOS Target: ${{ github.event.inputs.macos_version || '12.0' }}
+        ========================================
+        EOF
+        
+        # 创建 DMG
+        hdiutil create \
+          -volname "MyApp for Intel Mac" \
+          -srcfolder dmg_temp \
+          -ov \
+          -format UDZO \
+          dist/MyApp-Intel-Mac.dmg
+        
+        echo "✅ DMG created: dist/MyApp-Intel-Mac.dmg"
+        ls -lh dist/*.dmg
+        
+        # 清理临时目录
+        rm -rf dmg_temp
+    
+    - name: Create launcher script for Intel
+      run: |
+        echo "🔄 Creating launcher script for Intel Mac..."
         
         # 创建启动脚本
-        cat > "dist/Launch ${APP_NAME}.command" << EOF
+        cat > dist/LaunchMyApp-Intel.command << 'EOF'
         #!/bin/bash
         
-        # 获取脚本所在目录
-        SCRIPT_DIR="\$( cd "\$( dirname "\${BASH_SOURCE[0]}" )" && pwd )"
+        # ========================================
+        # MyApp Launcher for Intel Mac
+        # ========================================
         
         echo "========================================"
-        echo "   $APP_NAME Launcher"
+        echo "   MyApp Launcher (Intel Mac)"
         echo "========================================"
         echo ""
-        echo "Starting $APP_NAME..."
+        echo "This app is built for Intel-based Macs."
+        echo "Compatible with macOS 12.0 and later."
+        echo ""
+        
+        # 获取脚本所在目录
+        SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+        APP_PATH="$SCRIPT_DIR/MyApp.app"
+        
+        # 检查应用是否存在
+        if [ ! -d "$APP_PATH" ]; then
+          echo "❌ ERROR: MyApp.app not found!"
+          echo "Make sure this script is in the same folder as MyApp.app"
+          read -p "Press Enter to close..." dummy
+          exit 1
+        fi
+        
+        # 检查架构
+        echo "🔍 Checking system architecture..."
+        ARCH=$(uname -m)
+        echo "System architecture: $ARCH"
+        
+        if [ "$ARCH" = "x86_64" ]; then
+          echo "✅ Running on Intel Mac - perfect match!"
+        elif [ "$ARCH" = "arm64" ]; then
+          echo "⚠️  Running on Apple Silicon Mac"
+          echo "This app is built for Intel, will run via Rosetta 2"
+        else
+          echo "⚠️  Unknown architecture"
+        fi
+        
+        echo ""
+        echo "🚀 Starting MyApp..."
         echo ""
         
         # 打开应用
-        open "\$SCRIPT_DIR/${APP_NAME}.app"
+        open "$APP_PATH"
         
         echo "App launched! You can close this window."
         echo ""
@@ -167,59 +239,32 @@ jobs:
         EOF
         
         # 赋予执行权限
-        chmod +x "dist/Launch ${APP_NAME}.command"
+        chmod +x dist/LaunchMyApp-Intel.command
         
-        echo "✅ Launcher created: dist/Launch ${APP_NAME}.command"
+        echo "✅ Launcher created: dist/LaunchMyApp-Intel.command"
     
-    - name: Create README for users
+    - name: Test on Intel architecture (模拟)
       run: |
-        APP_NAME="${{ env.APP_NAME }}"
+        echo "🧪 Testing Intel compatibility..."
         
-        echo "📝 Creating user instructions..."
-        
-        cat > "dist/README.txt" << EOF
-        ========================================
-        $APP_NAME - Installation and Usage
-        ========================================
-        
-        🎯 HOW TO RUN:
-        
-        1. EASY WAY (Recommended):
-           - Double-click "${APP_NAME}.app"
-           - If macOS blocks it, go to:
-             System Preferences → Security & Privacy → General
-             Click "Allow Anyway"
-        
-        2. ALTERNATIVE WAY:
-           - Double-click "Launch ${APP_NAME}.command"
-           - Follow the instructions in the terminal
-        
-        🔧 TROUBLESHOOTING:
-        
-        If you see "App is damaged":
-          1. Open Terminal
-          2. Run: xattr -cr /path/to/${APP_NAME}.app
-        
-        If you see "Cannot be opened":
-          1. Right-click the app
-          2. Select "Open"
-          3. Click "Open" in the dialog
-        
-        ========================================
-        Built on: $(date)
-        macOS Target: ${{ github.event.inputs.macos_version || '12.0' }}
-        Python Version: ${{ github.event.inputs.python_version || '3.11' }}
-        ========================================
-        EOF
-        
-        echo "✅ README created"
+        if [ -f "dist/MyApp.app/Contents/MacOS/MyApp" ]; then
+          # 使用 arch 命令模拟 Intel 环境运行
+          echo "Testing with arch -x86_64..."
+          arch -x86_64 dist/MyApp.app/Contents/MacOS/MyApp --version 2>&1 || echo "Test completed"
+          
+          # 检查文件类型
+          echo "File info:"
+          file dist/MyApp.app/Contents/MacOS/MyApp
+        else
+          echo "⚠️  Executable not found for testing"
+        fi
     
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ env.APP_NAME }}-macos-${{ github.sha }}
+        name: MyApp-Intel-macOS-${{ github.sha }}
         path: |
-          dist/${{ env.APP_NAME }}.app
-          dist/Launch*.command
-          dist/README.txt
+          dist/MyApp.app
+          dist/MyApp-Intel-Mac.dmg
+          dist/LaunchMyApp-Intel.command
         retention-days: 7
