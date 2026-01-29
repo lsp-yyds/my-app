@@ -1,5 +1,4 @@
 requests
-yaml
 customtkinter
 numpy
 pandas
