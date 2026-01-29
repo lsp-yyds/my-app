@@ -1,0 +1,89 @@
+name: Smart Build
+on:
+  push:
+    branches: [ main ]
+  release:
+    types: [created]
+  workflow_dispatch:  # 允许手动触发
+    inputs:
+      python_version:
+        description: 'Python version'
+        required: true
+        default: '3.11'
+        type: choice
+        options:
+          - '3.9'
+          - '3.10'
+          - '3.11'
+          - '3.12'
+      macos_version:
+        description: 'Minimum macOS version'
+        required: true
+        default: '12.0'
+        type: choice
+        options:
+          - '11.0'
+          - '12.0'
+          - '13.0'
+          - '14.0'
+jobs:
+  build:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ github.event.inputs.python_version || '3.11' }}
+    
+    - name: Install dependencies
+      run: |
+        pip install pyinstaller
+        # 如果有 requirements.txt
+        if [ -f "requirements.txt" ]; then
+          pip install -r requirements.txt
+        fi
+    
+    - name: Get version info
+      id: version
+      run: |
+        # 如果是发布版本，从标签获取版本号
+        if [[ "${{ github.event_name }}" == "release" ]]; then
+          VERSION="${{ github.event.release.tag_name }}"
+        else
+          # 否则用 commit hash
+          VERSION="dev-$(git rev-parse --short HEAD)"
+        fi
+        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+    
+    - name: Build application
+      env:
+        TARGET_OS: ${{ github.event.inputs.macos_version || '12.0' }}
+      run: |
+        # 构建
+        pyinstaller \
+          --onefile \
+          --name "myapp_v${{ steps.version.outputs.VERSION }}_macos${TARGET_OS}" \
+          main.py
+        
+        # 重命名文件，去掉 .app 后缀（如果需要）
+        cd dist
+        for file in *.app; do
+          [ -f "$file" ] && mv "$file" "${file%.app}"
+        done
+    
+    - name: Upload to GitHub Releases
+      if: github.event_name == 'release'
+      uses: softprops/action-gh-release@v1
+      with:
+        files: dist/*
+    
+    - name: Upload as artifact
+      if: github.event_name != 'release'
+      uses: actions/upload-artifact@v4
+      with:
+        name: myapp-build
+        path: dist/
