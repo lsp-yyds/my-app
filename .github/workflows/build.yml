@@ -43,44 +43,147 @@ jobs:
     - name: Clean previous builds
       run: rm -rf build dist __pycache__
     
-    - name: Build with simple name
+    - name: Build as macOS App
       env:
         MACOSX_DEPLOYMENT_TARGET: ${{ github.event.inputs.macos_version || '12.0' }}
       run: |
         echo "Building for macOS $MACOSX_DEPLOYMENT_TARGET with Python ${{ github.event.inputs.python_version || '3.11' }}"
         
-        # 使用简单固定的文件名
-        pyinstaller --onefile --name "myapp" main.py
+        # 关键修改：使用 --windowed 创建 .app 应用包
+        pyinstaller \
+          --windowed \  # 创建 macOS 应用包
+          --name "MyApp" \
+          main.py
         
         # 检查是否成功
-        if [ -f "dist/myapp" ]; then
-          echo "✅ Build successful!"
-          ls -lh dist/
-          file dist/myapp
+        if [ -d "dist/MyApp.app" ]; then
+          echo "✅ macOS App created successfully!"
+          echo "📁 App location: dist/MyApp.app"
+          
+          # 显示应用包信息
+          echo "📦 App bundle contents:"
+          find dist/MyApp.app -type f | head -10
+          
+          # 获取应用包大小
+          APP_SIZE=$(du -sh dist/MyApp.app | cut -f1)
+          echo "📊 App size: $APP_SIZE"
         else
-          echo "❌ Build failed: dist/myapp not found"
+          echo "❌ Build failed: MyApp.app not found"
           exit 1
         fi
     
-    - name: Rename with version info
+    - name: Create DMG installer (可选)
       run: |
-        # 获取 commit hash
-        COMMIT_HASH=$(git rev-parse --short HEAD)
-        # 获取 Python 版本
-        PYTHON_VERSION=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        # 获取 macOS 目标版本
-        MACOS_TARGET=${MACOSX_DEPLOYMENT_TARGET:-12.0}
+        # 创建 DMG 安装包，方便分发
+        echo "📦 Creating DMG installer..."
         
-        # 重命名文件
-        NEW_NAME="myapp_py${PYTHON_VERSION}_macos${MACOS_TARGET}_${COMMIT_HASH}"
-        mv dist/myapp "dist/${NEW_NAME}"
+        # 创建临时目录
+        mkdir -p dmg_temp
         
-        echo "✅ Renamed to: ${NEW_NAME}"
-        echo "NEW_NAME=${NEW_NAME}" >> $GITHUB_ENV
+        # 复制应用到临时目录
+        cp -r dist/MyApp.app dmg_temp/
+        
+        # 创建 Applications 文件夹链接
+        ln -s /Applications dmg_temp/Applications
+        
+        # 创建 DMG
+        hdiutil create \
+          -volname "MyApp" \
+          -srcfolder dmg_temp \
+          -ov \
+          -format UDZO \
+          dist/MyApp.dmg
+        
+        echo "✅ DMG created: dist/MyApp.dmg"
+        ls -lh dist/*.dmg
+        
+        # 清理临时目录
+        rm -rf dmg_temp
     
-    - name: Upload artifact
+    - name: Create launcher script (备用方案)
+      run: |
+        # 同时创建一个 .command 文件作为备用启动方式
+        echo "🔄 Creating launcher script..."
+        
+        # 创建启动脚本
+        cat > dist/LaunchMyApp.command << 'EOF'
+        #!/bin/bash
+        
+        # 获取脚本所在目录
+        SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+        
+        echo "========================================"
+        echo "   MyApp Launcher"
+        echo "========================================"
+        echo ""
+        echo "Starting MyApp..."
+        echo ""
+        
+        # 打开应用
+        open "$SCRIPT_DIR/MyApp.app"
+        
+        echo "App launched! You can close this window."
+        echo ""
+        read -p "Press Enter to close..." dummy
+        EOF
+        
+        # 赋予执行权限
+        chmod +x dist/LaunchMyApp.command
+        
+        echo "✅ Launcher created: dist/LaunchMyApp.command"
+    
+    - name: Create README for users
+      run: |
+        echo "📝 Creating user instructions..."
+        
+        cat > dist/README.txt << 'EOF'
+        ========================================
+        MyApp - Installation and Usage
+        ========================================
+        
+        🎯 TWO WAYS TO RUN:
+        
+        1. EASY WAY (Recommended):
+           - Double-click "MyApp.app"
+           - If macOS blocks it, go to:
+             System Preferences → Security & Privacy → General
+             Click "Allow Anyway"
+        
+        2. ALTERNATIVE WAY:
+           - Double-click "LaunchMyApp.command"
+           - Follow the instructions in the terminal
+        
+        📦 DMG INSTALLER:
+        - Double-click "MyApp.dmg"
+        - Drag "MyApp.app" to the Applications folder
+        
+        🔧 TROUBLESHOOTING:
+        
+        If you see "App is damaged":
+          1. Open Terminal
+          2. Run: xattr -cr /path/to/MyApp.app
+        
+        If you see "Cannot be opened":
+          1. Right-click the app
+          2. Select "Open"
+          3. Click "Open" in the dialog
+        
+        ========================================
+        Built on: $(date)
+        macOS Target: ${{ github.event.inputs.macos_version || '12.0' }}
+        Python Version: ${{ github.event.inputs.python_version || '3.11' }}
+        ========================================
+        EOF
+        
+        echo "✅ README created"
+    
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: myapp-${{ github.sha }}
-        path: dist/
+        name: MyApp-macos-${{ github.sha }}
+        path: |
+          dist/MyApp.app
+          dist/MyApp.dmg
+          dist/LaunchMyApp.command
+          dist/README.txt
         retention-days: 7
